@@ -14,7 +14,9 @@ from PDF_Translate.textlayer import extract_original_page_objects
 from PDF_Translate.ocr import ocr_fix_pdf
 from PDF_Translate.utils import build_base, resolve_font
 from PDF_Translate.overlay import build_overlay_items_from_doc
+from PDF_Translate.overlay import build_overlay_items_from_doc
 from PDF_Translate.pipeline import run_mode
+from PDF_Translate.translation import get_translator
 
 from PDF_Translate.highlight_boxes import _hex_to_rgb01, add_boxes_to_pdf, build_annotation_items_from_pdf
 
@@ -49,6 +51,20 @@ with st.sidebar:
     overlay_off_y = st.number_input("Overlay offset Y", value=0.0, step=0.5)
 
     st.markdown("---")
+    st.subheader("Translation Provider")
+    tr_provider = st.selectbox("Provider", ["Google", "DeepL", "OpenAI", "Ollama"], index=0)
+    tr_api_key = ""
+    tr_model = ""
+    
+    if tr_provider in ("DeepL", "OpenAI"):
+        tr_api_key = st.text_input(f"{tr_provider} API Key", type="password")
+    
+    if tr_provider == "OpenAI":
+        tr_model = st.text_input("Model", "gpt-4o-mini")
+    elif tr_provider == "Ollama":
+        tr_model = st.text_input("Model", "llama3")
+
+    st.markdown("---")
     st.subheader("Fonts")
     en_font_path = st.text_input("English font path", FONT_EN_PATH)
     hi_font_path = st.text_input("Hindi font path", FONT_HI_PATH_2)
@@ -80,6 +96,11 @@ st.write("Upload a PDF for Translation.")
 pdf_file = st.file_uploader("PDF", type=["pdf"])
 
 if st.button("Run translation", disabled=pdf_file is None, type="primary"):
+    # Validate keys
+    if tr_provider in ("DeepL", "OpenAI") and not tr_api_key:
+        st.error(f"Please provide API Key for {tr_provider}")
+        st.stop()
+
     with st.spinner("Processing..."):
         with tempfile.TemporaryDirectory() as workdir:
             workdir = Path(workdir)
@@ -106,6 +127,17 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 hi_name, hi_file = resolve_font(FONT_HI_LOGICAL_2, hi_font_path)
             else:
                 hi_name, hi_file = ("helv", None)
+
+            # Initialize Translator
+            try:
+                translator = get_translator(
+                    provider=tr_provider,
+                    api_key=tr_api_key,
+                    model=tr_model
+                )
+            except Exception as e:
+                st.error(f"Failed to initialize translator: {e}")
+                st.stop()
 
             # Overlay items (optional)
             overlay_items = None
@@ -142,6 +174,7 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 overlay_scale_y=float(overlay_scale_y),
                 overlay_off_x=float(overlay_off_x),
                 overlay_off_y=float(overlay_off_y),
+                translator=translator,
             )
 
             # Collect produced PDFs

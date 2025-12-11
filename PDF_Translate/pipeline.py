@@ -62,7 +62,9 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
              overlay_margin_px: float = 0.1,
              overlay_target_dpi: int = 600,
              overlay_scale_x: float = 1.0, overlay_scale_y: float = 1.0,
-             overlay_off_x: float = 0.0, overlay_off_y: float = 0.0) -> None:
+             overlay_off_x: float = 0.0, overlay_off_y: float = 0.0,
+             # ----- translator -----
+             translator = None) -> None:
     """
     - span/line/block/hybrid: style-preserving translation and draw.
     - overlay: paint from prebuilt JSON items.
@@ -108,6 +110,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     font_en_name=font_en_name, font_en_file=font_en_file,
                     font_hi_name=font_hi_name, font_hi_file=font_hi_file,
                     output_pdf=_make_output(sub_mode),
+                    translator=translator,
                 )
                 out_files.append((sub_mode, _make_output(sub_mode)))
             except Exception as e:
@@ -128,6 +131,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     overlay_margin_px=overlay_margin_px, overlay_target_dpi=overlay_target_dpi,
                     overlay_scale_x=overlay_scale_x, overlay_scale_y=overlay_scale_y,
                     overlay_off_x=overlay_off_x, overlay_off_y=overlay_off_y,
+                    translator=translator,
                 )
                 out_files.append(("overlay", _make_output("overlay")))
             except Exception as e:
@@ -298,7 +302,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                 for ln in bl.lines:
                     y0, y1 = ln.rect[1], ln.rect[3]
                     for seg in ln.segments:
-                        text_out = translate_text(seg.text, sl, dl) or ""
+                        text_out = translate_text(seg.text, sl, dl, translator) or ""
                         if text_out and _DEV.search(text_out):
                             fname, ffile = font_hi_name, font_hi_file
                         else:
@@ -315,7 +319,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                         cell_rect = (best_col[0], y0, best_col[1], y1)
                         insert_text_fit(page, cell_rect, text_out, fname, base_size, color, fontfile=ffile)
             else:
-                text_out = translate_text(bl.text, sl, dl) or ""
+                text_out = translate_text(bl.text, sl, dl, translator) or ""
                 if text_out and _DEV.search(text_out):
                     fname, ffile = font_hi_name, font_hi_file
                 else:
@@ -336,7 +340,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             else:
                 sl = _dominant_script(sp.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
-            text_out = translate_text(sp.text, sl, dl) or ""
+            text_out = translate_text(sp.text, sl, dl, translator) or ""
             page = out[sp.page]
             if text_out and _DEV.search(text_out): fname, ffile = font_hi_name, font_hi_file
             else:                                   fname, ffile = font_en_name, font_en_file
@@ -351,7 +355,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             else:
                 sl = _dominant_script(ln.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
-            text_out = translate_text(ln.text, sl, dl) or ""
+            text_out = translate_text(ln.text, sl, dl, translator) or ""
             page = out[ln.page]
             if text_out and _DEV.search(text_out): fname, ffile = font_hi_name, font_hi_file
             else:                                   fname, ffile = font_en_name, font_en_file
@@ -368,7 +372,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             else:
                 sl = _dominant_script(bl.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
-            text_out = translate_text(bl.text, sl, dl) or ""
+            text_out = translate_text(bl.text, sl, dl, translator) or ""
             page = out[bl.page]
             if text_out and _DEV.search(text_out): fname, ffile = font_hi_name, font_hi_file
             else:                                   fname, ffile = font_en_name, font_en_file

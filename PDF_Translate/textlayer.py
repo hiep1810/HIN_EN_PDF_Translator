@@ -4,14 +4,19 @@ import statistics, asyncio, nest_asyncio, fitz, re
 nest_asyncio.apply()
 
 from .utils import normalize_color, Span, Line, Block, rect_iou, rect_center, point_in_rect, center_dist
-from .constants import _TR
+from .utils import normalize_color, Span, Line, Block, rect_iou, rect_center, point_in_rect, center_dist
+# from .constants import _TR # REMOVED
 
-def translate_text(text: str, src: str, dest: str) -> str:
+def translate_text(text: str, src: str, dest: str, translator=None) -> str:
+    """
+    Translates text. 
+    If translator is None, returns original text (or raises error if we prefer).
+    """
+    if not translator:
+        return text
+        
     try:
-        res = _TR.translate(text, src=src, dest=dest)
-        if asyncio.iscoroutine(res):
-            loop = asyncio.get_event_loop(); res = loop.run_until_complete(res)
-        out = getattr(res, "text", text)
+        out = translator.translate(text, source_lang=src, target_lang=dest)
         # normalize whitespace and avoid spaces before punctuation/danda
         out = "\n".join(" ".join(line.split()) for line in out.splitlines())
         out = re.sub(r"\s+([,.;:!?\u0964])", r"\1", out)

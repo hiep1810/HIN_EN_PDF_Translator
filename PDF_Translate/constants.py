@@ -19,6 +19,6 @@ FONT_HI_PATH    = str(Path(__file__).resolve().parent.parent / r"assets/fonts/Ti
 FONT_HI_LOGICAL_2 = "NotoSansDevanagari"
 FONT_HI_PATH_2    = str(Path(__file__).resolve().parent.parent / r"assets/fonts/NotoSansDevanagari-Regular.ttf")
 
-_TR = Translator(timeout=TR_TIMEOUT, service_urls=["translate.googleapis.com"])
+# _TR = Translator(timeout=TR_TIMEOUT, service_urls=["translate.googleapis.com"]) # REMOVED
 _DEV = re.compile(r"[\u0900-\u097F]")   # Devanagari
 _LAT = re.compile(r"[A-Za-z]")

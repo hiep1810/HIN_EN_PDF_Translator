@@ -4,3 +4,5 @@ pillow
 ocrmypdf
 googletrans
 nest_asyncio
+openai
+deepl
