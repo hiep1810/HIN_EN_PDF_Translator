@@ -4,7 +4,7 @@ from .utils import Span, pick_redact_fill_for_color, insert_text_fit, _dominant_
 from .constants import _DEV
 from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_color_size_from_original, translate_text
 from .overlay import overlay_choose_fontfile_for_text, overlay_draw_text_as_image, overlay_transform_rect, dominant_text_fill_for_rect
-from .hybrid import extract_blocks_with_segments, is_table_like, build_columns
+from .hybrid import extract_blocks_with_segments, is_table_like, build_columns, extract_blocks_from_layout
 
 def erase_original_text(out_doc: fitz.Document, spans: List[Span], mode: str, erase_mode: str, _unused_fill):
     """
@@ -63,8 +63,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
              overlay_target_dpi: int = 600,
              overlay_scale_x: float = 1.0, overlay_scale_y: float = 1.0,
              overlay_off_x: float = 0.0, overlay_off_y: float = 0.0,
+             overlay_off_x: float = 0.0, overlay_off_y: float = 0.0,
              # ----- translator -----
-             translator = None) -> None:
+             translator = None,
+             # ----- layout -----
+             use_ai_layout: bool = False,
+             layout_analyzer = None) -> None:
     """
     - span/line/block/hybrid: style-preserving translation and draw.
     - overlay: paint from prebuilt JSON items.
@@ -111,6 +115,8 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     font_hi_name=font_hi_name, font_hi_file=font_hi_file,
                     output_pdf=_make_output(sub_mode),
                     translator=translator,
+                    use_ai_layout=use_ai_layout if sub_mode == "hybrid" else False,
+                    layout_analyzer=layout_analyzer,
                 )
                 out_files.append((sub_mode, _make_output(sub_mode)))
             except Exception as e:
@@ -237,7 +243,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
         return
 
     if mode == "hybrid":
-        hblocks = extract_blocks_with_segments(src)
+        if use_ai_layout and layout_analyzer:
+            print("[hybrid] Using AI Layout Analysis...")
+            hblocks = extract_blocks_from_layout(src, layout_analyzer)
+        else:
+            hblocks = extract_blocks_with_segments(src)
+            
         derive_block_styles_from_spans(hblocks, spans)
 
         # ---- ERASE: dynamic fill, supports both overlay_items and block fallback ----

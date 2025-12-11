@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import List, Tuple
 import fitz
+from PIL import Image
+from .layout import LayoutAnalyzer
 
 @dataclass
 class HybridSegment:
@@ -105,6 +107,115 @@ def extract_blocks_with_segments(doc: fitz.Document) -> List[HybridBlock]:
                 continue
             block_text = "\n".join(block_text_lines).strip()
             blocks.append(HybridBlock(pno, brect, lines, block_text))
+            if not lines:
+                continue
+            block_text = "\n".join(block_text_lines).strip()
+            blocks.append(HybridBlock(pno, brect, lines, block_text))
+    return blocks
+
+def extract_blocks_from_layout(doc: fitz.Document, analyzer: LayoutAnalyzer) -> List[HybridBlock]:
+    """
+    Uses AI Layout Analyzer to discover blocks, then extracts text/lines from those blocks
+    using PyMuPDF with 'clip'.
+    """
+    blocks: List[HybridBlock] = []
+    
+    try:
+        PRES = fitz.TEXT_PRESERVE_WHITESPACE | fitz.TEXT_PRESERVE_LIGATURES
+        # For clipped extraction, we call page.get_text("dict", clip=...) strictly
+        # so we don't define a global getter here.
+    except Exception:
+        pass
+
+    for pno in range(len(doc)):
+        page = doc[pno]
+        
+        # 1. Rasterize for AI
+        # Use lower DPI for speed if model allows, but Surya settings usually handle resizing.
+        # We give it decent quality.
+        pix = page.get_pixmap(dpi=150) 
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # 2. Get Layout BBoxes (pixels relative to image size)
+        # Note: Surya returns coords relative to the image we passed.
+        # PyMuPDF expects coords in PDF points.
+        # We must scale.
+        
+        ai_boxes = analyzer.analyze_page(img) # [[x0, y0, x1, y1], ...]
+        
+        # Calculate scale factors
+        # pix.width is pixels, page.rect.width is points
+        sx = page.rect.width / pix.width
+        sy = page.rect.height / pix.height
+        
+        for box in ai_boxes:
+            # Scale box to PDF points
+            # box is x0, y0, x1, y1
+            r_px = list(box)
+            r_pt = fitz.Rect(r_px[0]*sx, r_px[1]*sy, r_px[2]*sx, r_px[3]*sy)
+            
+            # Clip might be slightly off, maybe expand a tiny bit?
+            # Surya boxes are usually tight.
+            
+            # 3. Extract text from this region
+            # We use the same parsing logic as 'extract_blocks_with_segments' 
+            # effectively treating this AI box as a single "block".
+            
+            # We fetch rawdict for this CLIP
+            try:
+                raw = page.get_text("dict", clip=r_pt, flags=fitz.TEXT_PRESERVE_WHITESPACE)
+            except:
+                raw = page.get_text("dict", clip=r_pt)
+                
+            lines: List[HybridLine] = []
+            block_text_lines: List[str] = []
+            
+            # Rawdict returns {blocks: [...]}, inside blocks are lines...
+            for b in raw.get("blocks", []):
+                for ln in b.get("lines", []):
+                    spans = ln.get("spans", [])
+                    if not spans: continue
+                    
+                    # Reconstruct pieces
+                    pieces = []
+                    rects, sizes = [], []
+                    for sp in spans:
+                        t = sp.get("text", "").strip()
+                        if not t: continue
+                        bbox = tuple(map(float, sp.get("bbox", r_pt)))
+                        size = float(sp.get("size", 11.5))
+                        pieces.append((bbox, t, size))
+                        rects.append(bbox); sizes.append(size)
+                    
+                    if not pieces: continue
+                    
+                    # One hybrid line per PDF line
+                    x0=min(r[0] for r in rects); y0=min(r[1] for r in rects)
+                    x1=max(r[2] for r in rects); y1=max(r[3] for r in rects)
+                    
+                    # For AI layout, we assume the AI *already* split columns.
+                    # So we don't need the complex SEG_GAP splitting logic *inside* the box,
+                    # unless it's a table cell detection issue.
+                    # But Surya Layout detects *columns* and *paragraphs*.
+                    # Let's assume we treat the line as a single segment for simplicity, 
+                    # OR we can keep the segment logic just in case.
+                    # Let's keep it simple: 1 segment per line.
+                    
+                    line_text = " ".join(p[1] for p in pieces)
+                    # Create one segment for the whole line
+                    seg = HybridSegment((x0,y0,x1,y1), line_text, sizes)
+                    
+                    lines.append(HybridLine((x0,y0,x1,y1), line_text, [seg]))
+                    block_text_lines.append(line_text)
+            
+            if not lines: continue
+            
+            # Create HybridBlock
+            # We use the AI box as the rect, or the union of lines?
+            # AI box is safer for placement.
+            block_text = "\n".join(block_text_lines)
+            blocks.append(HybridBlock(pno, tuple(r_pt), lines, block_text))
+            
     return blocks
 
 

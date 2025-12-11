@@ -17,6 +17,7 @@ from PDF_Translate.overlay import build_overlay_items_from_doc
 from PDF_Translate.overlay import build_overlay_items_from_doc
 from PDF_Translate.pipeline import run_mode
 from PDF_Translate.translation import get_translator
+from PDF_Translate.layout import get_layout_analyzer
 
 from PDF_Translate.highlight_boxes import _hex_to_rgb01, add_boxes_to_pdf, build_annotation_items_from_pdf
 
@@ -49,6 +50,10 @@ with st.sidebar:
     overlay_scale_y = st.number_input("Overlay scale Y", value=1.0, step=0.01)
     overlay_off_x = st.number_input("Overlay offset X", value=0.0, step=0.5)
     overlay_off_y = st.number_input("Overlay offset Y", value=0.0, step=0.5)
+
+    st.markdown("---")
+    st.subheader("Layout Analysis")
+    layout_method = st.selectbox("Layout Method (Hybrid Mode Only)", ["Heuristic (Fast)", "Surya AI (Smart)"], index=0)
 
     st.markdown("---")
     st.subheader("Translation Provider")
@@ -139,6 +144,16 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 st.error(f"Failed to initialize translator: {e}")
                 st.stop()
 
+            # Initialize Layout Analyzer if needed
+            layout_analyzer = None
+            if "Surya" in layout_method and (mode == "hybrid" or mode == "all"):
+                try:
+                    with st.spinner("Loading AI Layout Model (Surya)..."):
+                        layout_analyzer = get_layout_analyzer("Surya")
+                except Exception as e:
+                    st.error(f"Failed to load Layout Analyzer: {e}")
+                    st.stop()
+
             # Overlay items (optional)
             overlay_items = None
             if mode in ("overlay","all"):
@@ -175,6 +190,8 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 overlay_off_x=float(overlay_off_x),
                 overlay_off_y=float(overlay_off_y),
                 translator=translator,
+                use_ai_layout=("Surya" in layout_method),
+                layout_analyzer=layout_analyzer,
             )
 
             # Collect produced PDFs

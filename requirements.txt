@@ -6,3 +6,4 @@ googletrans
 nest_asyncio
 openai
 deepl
+surya-ocr
