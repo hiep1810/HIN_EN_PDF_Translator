@@ -300,6 +300,18 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                             zf.write(gen_json, arcname=gen_json.name)
             zip_buf.seek(0)
 
+            # Save for preview (persist in session state)
+            st.session_state["preview_src_bytes"] = fitz.open(src_fixed).tobytes()
+            # If "all" mode, picking the first output or the 'main' output is tricky. 
+            # All mode makes a zip. Let's just preview the 'hybrid' or 'block' if available, or just skip preview for 'all' mode or pick one.
+            # Simpler: If mode != "all", use output_pdf_path.
+            if mode != "all" and Path(output_pdf_path).exists():
+                st.session_state["preview_out_bytes"] = fitz.open(output_pdf_path).tobytes()
+            else:
+                 # For 'all' mode, maybe we don't preview or we pick the first generated one?
+                 # Let's clean session state to avoid confusion
+                 st.session_state.pop("preview_out_bytes", None)
+
     st.success("Done!")
     st.download_button(
         "⬇️ Download results (ZIP)",
@@ -307,3 +319,35 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
         file_name=zip_display_name,
         mime="application/zip"
     )
+
+    # ----------------------------
+    # Preview Section
+    # ----------------------------
+    if "preview_src_bytes" in st.session_state and "preview_out_bytes" in st.session_state:
+        st.divider()
+        st.subheader("Side-by-Side Preview")
+        
+        try:
+            doc_src = fitz.open(stream=st.session_state["preview_src_bytes"], filetype="pdf")
+            doc_out = fitz.open(stream=st.session_state["preview_out_bytes"], filetype="pdf")
+            
+            total_pages = len(doc_src)
+            if total_pages > 0:
+                page_num = st.slider("Page Selector", 1, total_pages, 1) - 1
+                
+                c1, c2 = st.columns(2)
+                
+                with c1:
+                    st.caption("Original")
+                    pix1 = doc_src[page_num].get_pixmap(dpi=150)
+                    st.image(pix1.tobytes("png"), use_container_width=True)
+                    
+                with c2:
+                    st.caption("Translated")
+                    if page_num < len(doc_out):
+                        pix2 = doc_out[page_num].get_pixmap(dpi=150)
+                        st.image(pix2.tobytes("png"), use_container_width=True)
+                    else:
+                        st.info("Page not found in output.")
+        except Exception as e:
+            st.error(f"Preview error: {e}")
