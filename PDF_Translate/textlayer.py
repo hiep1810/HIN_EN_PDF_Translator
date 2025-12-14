@@ -1,5 +1,6 @@
 from typing import Tuple, List, Dict, Any
 import statistics, asyncio, nest_asyncio, fitz, re
+from concurrent.futures import ThreadPoolExecutor
 
 nest_asyncio.apply()
 
@@ -24,7 +25,29 @@ def translate_text(text: str, src: str, dest: str, translator=None) -> str:
     except Exception as e:
         print(f"[translate] {type(e).__name__}: {e}"); return text
 
-# ------------------ original style extraction ------------------
+    except Exception as e:
+        print(f"[translate] {type(e).__name__}: {e}"); return text
+
+def batch_translate_text(items: List[Tuple[str, str, str]], translator, max_workers: int = 5) -> List[str]:
+    """
+    Translates a list of (text, src, dest) tuples in parallel.
+    Returns a list of translated strings in the same order.
+    """
+    if not items:
+        return []
+    if not translator:
+        return [it[0] for it in items]
+
+    def _worker(args):
+        txt, s, d = args
+        return translate_text(txt, s, d, translator)
+
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # map returns iterator in order of submission
+        results = list(executor.map(_worker, items))
+    
+    return results
 def extract_original_page_objects(input_pdf: str) -> Dict[int, List[Dict[str, Any]]]:
     doc = fitz.open(input_pdf); per_page: Dict[int, List[Dict[str, Any]]] = {}
     for page_num, page in enumerate(doc):
@@ -35,6 +58,7 @@ def extract_original_page_objects(input_pdf: str) -> Dict[int, List[Dict[str, An
                 for span in line["spans"]:
                     bbox = span.get("bbox")
                     if not bbox: continue
+                    arr.append({
                         "bbox": tuple(map(float, bbox)),
                         "color": normalize_color(span.get("color", (0,0,0)) ),
                         "size": float(span.get("size", 10.0)),

@@ -1,6 +1,7 @@
 # app.py
 import os, io, time, tempfile, zipfile, json, re
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
 
 import streamlit as st
 import fitz
@@ -119,9 +120,24 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
             orig_index = extract_original_page_objects(input_pdf_path)
 
             # Optionally OCR-fix PDF
-            src_fixed = input_pdf_path if skip_ocr else ocr_fix_pdf(
-                input_pdf_path, lang=lang, dpi=dpi, optimize=optimize
-            )
+            if not skip_ocr:
+                try:
+                    # Offload to process pool (even if blocking for UI, keeps main process clean)
+                    # For Streamlit, this actually spawns a process, which is good.
+                    with ProcessPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(
+                            ocr_fix_pdf, 
+                            input_pdf=input_pdf_path, 
+                            lang=lang, 
+                            dpi=dpi, 
+                            optimize=optimize
+                        )
+                        src_fixed = future.result()
+                except Exception as e:
+                    st.error(f"OCR failed: {e}")
+                    src_fixed = input_pdf_path
+            else:
+                src_fixed = input_pdf_path
 
             # Build base in/out paths
             src, out = build_base(src_fixed)

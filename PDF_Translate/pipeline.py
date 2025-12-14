@@ -2,7 +2,7 @@ from typing import List, Tuple, Dict, Optional, Any
 import fitz, os, zipfile, statistics
 from .utils import Span, pick_redact_fill_for_color, insert_text_fit, _dominant_script
 from .constants import _DEV
-from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_color_size_from_original, translate_text
+from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_color_size_from_original, translate_text, batch_translate_text
 from .overlay import overlay_choose_fontfile_for_text, overlay_draw_text_as_image, overlay_transform_rect, dominant_text_fill_for_rect
 from .hybrid import extract_blocks_with_segments, is_table_like, build_columns, extract_blocks_from_layout
 from .font_matcher import FontMatcher
@@ -143,6 +143,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     overlay_margin_px=overlay_margin_px, overlay_target_dpi=overlay_target_dpi,
                     overlay_scale_x=overlay_scale_x, overlay_scale_y=overlay_scale_y,
                     overlay_off_x=overlay_off_x, overlay_off_y=overlay_off_y,
+                    overlay_off_x=overlay_off_x, overlay_off_y=overlay_off_y,
                     translator=translator,
                 )
                 out_files.append(("overlay", _make_output("overlay")))
@@ -206,7 +207,45 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     except Exception as e:
                         print(f"[page {pno}] apply_redactions error: {e}")
 
-        # Draw each overlay item (image or textbox)
+        # Prepare batch items
+        # overlay_items is List[Dict]
+        # We need to translate 'text' if not already done.
+        
+        # 1. Collect translation requests
+        # We'll store index to map back
+        requests = [] 
+        indices = []
+        
+        for i, it in enumerate(overlay_items):
+            pno = int(it["page"])
+            if pno < 0 or pno >= len(out): continue
+            
+            raw_text = it.get("text", "")
+            if not raw_text: continue
+            
+            # Determine direction (overlay logic is simpler, usually en->hi or explicit)
+            # Default auto logic from build_overlay_items usually sets it?
+            # Let's assume global translate_dir logic or simple detect.
+            if translate_dir == "hi->en": s, d = "hi", "en"
+            elif translate_dir == "en->hi": s, d = "en", "hi"
+            else:
+                sl_detect = _dominant_script(raw_text)
+                d = "en" if sl_detect == "hi" else "hi"
+                s = sl_detect
+                if s not in ("hi", "en"): s, d = "hi", "en"
+            
+            requests.append((raw_text, s, d))
+            indices.append(i)
+            
+        # 2. Batch translate
+        print(f"[overlay] Batch translating {len(requests)} items...")
+        translated_texts = batch_translate_text(requests, translator)
+        
+        # 3. Apply translations back to items (temporarily or permanently)
+        for idx, trans_text in zip(indices, translated_texts):
+             overlay_items[idx]["translated_text"] = trans_text
+
+        # 4. Render
         for it in overlay_items:
             pno = int(it["page"])
             if pno < 0 or pno >= len(out):
@@ -218,7 +257,9 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             )
             if rect.is_empty:
                 continue
-            text = it.get("text", "") or it.get("translated_text", "") or ""
+            
+            # Prefer translated text if we just made it, else existing
+            text = it.get("translated_text", "") or it.get("text", "")
             base_fs = float(it.get("fontsize", 11.5))
 
             fontfile = overlay_choose_fontfile_for_text(text, font_en_file, font_hi_file)
@@ -310,52 +351,67 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     except Exception as e:
                         print(f"[page {pno}] apply_redactions error: {e}")
 
-        for bl in hblocks:
+        # 1. Collect requests (Hybrid is complex: segments inside lines vs block text)
+        requests = []
+        # Store metadata to map back: (block_idx, line_idx, seg_idx) or (block_idx, None, None)
+        map_back = [] 
+        
+        for b_i, bl in enumerate(hblocks):
             if translate_dir == "hi->en":
-                sl, dl = "hi", "en"
+                 sl_def, dl_def = "hi", "en"
             elif translate_dir == "en->hi":
-                sl, dl = "en", "hi"
+                 sl_def, dl_def = "en", "hi"
             else:
-                sl = _dominant_script(bl.text); dl = "en" if sl == "hi" else "hi"
-                if sl not in ("hi", "en"): sl, dl = "hi", "en"
-
-            page = out[bl.page]
+                 sl_def = _dominant_script(bl.text)
+                 dl_def = "en" if sl_def == "hi" else "hi"
+                 if sl_def not in ("hi","en"): sl_def, dl_def = "hi", "en"
+            
             if is_table_like(bl):
-                cols = build_columns(bl)
-                for ln in bl.lines:
-                    y0, y1 = ln.rect[1], ln.rect[3]
-                    for seg in ln.segments:
-                        text_out = translate_text(seg.text, sl, dl, translator) or ""
-                        if text_out and _DEV.search(text_out):
-                            tgt_script = "hi"
-                        else:
-                            tgt_script = "en"
-                        
-                        # Match font using segment -> line -> block styles
-                        # Actually we have line.font/flags available
-                        fname, ffile = matcher.match_font(tgt_script, ln.flags, ln.font)
-
-                        try:
-                            base_size = statistics.median(seg.sizes)
-                        except statistics.StatisticsError:
-                            base_size = bl.fontsize
-                        color = bl.color
-                        best_col = max(
-                            cols,
-                            key=lambda c: max(0.0, min(seg.rect[2], c[1]) - max(seg.rect[0], c[0]))
-                        )
-                        cell_rect = (best_col[0], y0, best_col[1], y1)
-                        insert_text_fit(page, cell_rect, text_out, fname, base_size, color, fontfile=ffile)
+                 cols = build_columns(bl)
+                 # We need to translate segments
+                 for l_i, ln in enumerate(bl.lines):
+                     for s_i, seg in enumerate(ln.segments):
+                         requests.append((seg.text, sl_def, dl_def))
+                         map_back.append({'type': 'seg', 'b': b_i, 'l': l_i, 's': s_i, 'cols': cols})
             else:
-                text_out = translate_text(bl.text, sl, dl, translator) or ""
-                if text_out and _DEV.search(text_out):
-                    tgt_script = "hi"
-                else:
-                    tgt_script = "en"
-                
-                fname, ffile = matcher.match_font(tgt_script, bl.flags, bl.font)
-                
-                insert_text_fit(page, bl.rect, text_out, fname, bl.fontsize, bl.color, fontfile=ffile)
+                 # Translate full block
+                 requests.append((bl.text, sl_def, dl_def))
+                 map_back.append({'type': 'block', 'b': b_i})
+
+        # 2. Batch Translate
+        print(f"[hybrid] Batch translating {len(requests)} items...")
+        results = batch_translate_text(requests, translator)
+        
+        # 3. Render
+        # We iterate map_back and results together
+        for info, res_text in zip(map_back, results):
+            text_out = res_text or ""
+            bl = hblocks[info['b']]
+            page = out[bl.page]
+            
+            if info['type'] == 'seg':
+                 ln = bl.lines[info['l']]
+                 seg = ln.segments[info['s']]
+                 cols = info['cols']
+                 y0, y1 = ln.rect[1], ln.rect[3]
+                 
+                 # Font matching
+                 if text_out and _DEV.search(text_out): tgt = "hi"
+                 else: tgt = "en"
+                 fname, ffile = matcher.match_font(tgt, ln.flags, ln.font)
+
+                 try: base_size = statistics.median(seg.sizes)
+                 except: base_size = bl.fontsize
+                 
+                 best_col = max(cols, key=lambda c: max(0.0, min(seg.rect[2], c[1]) - max(seg.rect[0], c[0])))
+                 cell_rect = (best_col[0], y0, best_col[1], y1)
+                 insert_text_fit(page, cell_rect, text_out, fname, base_size, bl.color, fontfile=ffile)
+            else:
+                 # block
+                 if text_out and _DEV.search(text_out): tgt = "hi"
+                 else: tgt = "en"
+                 fname, ffile = matcher.match_font(tgt, bl.flags, bl.font)
+                 insert_text_fit(page, bl.rect, text_out, fname, bl.fontsize, bl.color, fontfile=ffile)
 
         os.makedirs(os.path.dirname(output_pdf) or ".", exist_ok=True)
         out.save(output_pdf); out.close(); src.close()
@@ -365,38 +421,46 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
     erase_original_text(out, spans, mode, erase_mode, redact_color)
 
     if mode == "span":
+        requests = []
         for sp in spans:
             if translate_dir == "hi->en": sl, dl = "hi","en"
             elif translate_dir == "en->hi": sl, dl = "en","hi"
             else:
                 sl = _dominant_script(sp.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
-            text_out = translate_text(sp.text, sl, dl, translator) or ""
-            page = out[sp.page]
+            requests.append((sp.text, sl, dl))
+            
+        print(f"[span] Batch translating {len(requests)} items...")
+        results = batch_translate_text(requests, translator)
+        
+        for sp, text_out in zip(spans, results):
             page = out[sp.page]
             if text_out and _DEV.search(text_out): tgt_script = "hi"
             else:                                   tgt_script = "en"
-            
             fname, ffile = matcher.match_font(tgt_script, sp.flags, sp.font)
             insert_text_fit(page, sp.rect, text_out, fname, sp.fontsize, sp.color, fontfile=ffile)
 
     elif mode == "line":
         lines = extract_lines_from_textlayer(src)
         derive_line_styles_from_spans(lines, spans)
+        
+        requests = []
         for ln in lines:
             if translate_dir == "hi->en": sl, dl = "hi","en"
             elif translate_dir == "en->hi": sl, dl = "en","hi"
             else:
                 sl = _dominant_script(ln.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
-            text_out = translate_text(ln.text, sl, dl, translator) or ""
-            page = out[ln.page]
+            requests.append((ln.text, sl, dl))
+            
+        print(f"[line] Batch translating {len(requests)} items...")
+        results = batch_translate_text(requests, translator)
+
+        for ln, text_out in zip(lines, results):
             page = out[ln.page]
             if text_out and _DEV.search(text_out): tgt_script = "hi"
             else:                                   tgt_script = "en"
-            
             fname, ffile = matcher.match_font(tgt_script, ln.flags, ln.font)
-
             base_size = ln.fontsize if ln.fontsize else 11.5
             color     = ln.color if ln.color else (0.0,)
             insert_text_fit(page, ln.rect, text_out, fname, base_size, color, fontfile=ffile)
@@ -404,14 +468,20 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
     elif mode == "block":
         blocks = extract_blocks_from_textlayer(src)
         derive_block_styles_from_spans(blocks, spans)
+        
+        requests = []
         for bl in blocks:
             if translate_dir == "hi->en": sl, dl = "hi","en"
             elif translate_dir == "en->hi": sl, dl = "en","hi"
             else:
                 sl = _dominant_script(bl.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
-            text_out = translate_text(bl.text, sl, dl, translator) or ""
-            page = out[bl.page]
+            requests.append((bl.text, sl, dl))
+
+        print(f"[block] Batch translating {len(requests)} items...")
+        results = batch_translate_text(requests, translator)
+
+        for bl, text_out in zip(blocks, results):
             page = out[bl.page]
             if text_out and _DEV.search(text_out): tgt_script = "hi"
             else:                                   tgt_script = "en"
