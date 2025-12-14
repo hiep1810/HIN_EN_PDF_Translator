@@ -13,6 +13,8 @@ class Span:
     text: str
     fontsize: float
     color: Tuple[float, ...]
+    font: str = "helv"
+    flags: int = 0
 
 @dataclass
 class Line:
@@ -21,6 +23,8 @@ class Line:
     text: str
     fontsize: float
     color: Tuple[float, ...]
+    font: str = "helv"
+    flags: int = 0
 
 @dataclass
 class Block:
@@ -29,6 +33,8 @@ class Block:
     text: str
     fontsize: float
     color: Tuple[float, ...]
+    font: str = "helv"
+    flags: int = 0
 
 def normalize_color(c: Any) -> Tuple[float, ...]:
     if c is None: return (0.0,)
@@ -124,15 +130,46 @@ def insert_text_fit(page: fitz.Page, rect, text: str, fontname: str,
     if debug_outline:
         sh = page.new_shape(); sh.draw_rect(r)
         sh.finish(width=0, color=None, fill=(1,0,0)); sh.commit(overlay=True)
-    for pct in (100,98,96,92,88,85,80,76,72,68,64,60,56,52,48,44,40,36,32,28,24,20,18,16,14,12,10,8,4,2):
-        fs = max(6.0, base_size*(pct/100.0))
-        rv = page.insert_textbox(
-            r, text, fontname=fontname, fontfile=fontfile, fontsize=fs,
-            lineheight=fs*1.12, color=color, align=fitz.TEXT_ALIGN_LEFT, encoding=0
-        )
-        if rv is not None and rv >= 0: return True
-    page.insert_text(r.bl, text, fontname=fontname, fontfile=fontfile, fontsize=base_size, color=color, encoding=0)
+        
+    # Smart calc
+    best_size = calculate_fitting_fontsize(page, (r.x0,r.y0,r.x1,r.y1), text, fontname, base_size, fontfile)
+    
+    # Attempt insert
+    rv = page.insert_textbox(
+        r, text, fontname=fontname, fontfile=fontfile, fontsize=best_size,
+        lineheight=best_size*1.12, color=color, align=fitz.TEXT_ALIGN_LEFT, encoding=0
+    )
+    if rv is not None and rv >= 0: return True
+    
+    # Fallback to simple insert if tiny or fails
+    page.insert_text(r.bl, text, fontname=fontname, fontfile=fontfile, fontsize=best_size, color=color, encoding=0)
     return False
+
+def calculate_fitting_fontsize(page: fitz.Page, rect: Tuple[float,float,float,float], 
+                               text: str, fontname: str, base_size: float, 
+                               fontfile: Optional[str] = None) -> float:
+    """
+    Calculates the maximum font size ensuring text fits within rect width.
+    Starts at base_size and shrinks if needed.
+    """
+    r_width = rect[2] - rect[0]
+    if r_width <= 0: return base_size
+    
+    # Check width at base size
+    try:
+        width = page.get_text_length(text, fontname=fontname, fontsize=base_size, fontfile=fontfile)
+    except:
+        return base_size
+        
+    if width <= r_width:
+        return base_size
+        
+    # Shrink to fit width
+    # Ratio approach is good approximation for width
+    ratio = r_width / width
+    # Cap min size
+    new_size = max(5.0, base_size * ratio * 0.95) # 0.95 safety factor
+    return new_size
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = PROJECT_ROOT / "assets" / "fonts"

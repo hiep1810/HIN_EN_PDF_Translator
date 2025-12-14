@@ -5,6 +5,7 @@ from .constants import _DEV
 from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_color_size_from_original, translate_text
 from .overlay import overlay_choose_fontfile_for_text, overlay_draw_text_as_image, overlay_transform_rect, dominant_text_fill_for_rect
 from .hybrid import extract_blocks_with_segments, is_table_like, build_columns, extract_blocks_from_layout
+from .font_matcher import FontMatcher
 
 def erase_original_text(out_doc: fitz.Document, spans: List[Span], mode: str, erase_mode: str, _unused_fill):
     """
@@ -74,6 +75,11 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
     - overlay: paint from prebuilt JSON items.
     - all: run span, line, block, hybrid, and (if provided) overlay; zip results.
     """
+
+
+    # Initialize Font Matcher
+    # We use provided regular fonts as base
+    matcher = FontMatcher(en_regular_path=font_en_file, hi_regular_path=font_hi_file)
 
     # ======================= "ALL" MODE =======================
     if mode == "all":
@@ -231,6 +237,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     fname, ffile = font_hi_name, font_hi_file
                 else:
                     fname, ffile = font_en_name, font_en_file
+                
+                # Check for styles in item? Overlay usually doesn't have flags unless we carried them over.
+                # Use standard matching just in case we have metadata.
+                # But item is a dict from JSON. Let's stick to basic logic or enhance Overlay item schema later.
+                # For now, simplistic is fine for Overlay.
+                
                 insert_text_fit(
                     page, (rect.x0, rect.y0, rect.x1, rect.y1),
                     text, fname, base_fs, (0.0,), fontfile=ffile
@@ -315,9 +327,14 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     for seg in ln.segments:
                         text_out = translate_text(seg.text, sl, dl, translator) or ""
                         if text_out and _DEV.search(text_out):
-                            fname, ffile = font_hi_name, font_hi_file
+                            tgt_script = "hi"
                         else:
-                            fname, ffile = font_en_name, font_en_file
+                            tgt_script = "en"
+                        
+                        # Match font using segment -> line -> block styles
+                        # Actually we have line.font/flags available
+                        fname, ffile = matcher.match_font(tgt_script, ln.flags, ln.font)
+
                         try:
                             base_size = statistics.median(seg.sizes)
                         except statistics.StatisticsError:
@@ -332,9 +349,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             else:
                 text_out = translate_text(bl.text, sl, dl, translator) or ""
                 if text_out and _DEV.search(text_out):
-                    fname, ffile = font_hi_name, font_hi_file
+                    tgt_script = "hi"
                 else:
-                    fname, ffile = font_en_name, font_en_file
+                    tgt_script = "en"
+                
+                fname, ffile = matcher.match_font(tgt_script, bl.flags, bl.font)
+                
                 insert_text_fit(page, bl.rect, text_out, fname, bl.fontsize, bl.color, fontfile=ffile)
 
         os.makedirs(os.path.dirname(output_pdf) or ".", exist_ok=True)
@@ -353,8 +373,11 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                 if sl not in ("hi","en"): sl, dl = "hi","en"
             text_out = translate_text(sp.text, sl, dl, translator) or ""
             page = out[sp.page]
-            if text_out and _DEV.search(text_out): fname, ffile = font_hi_name, font_hi_file
-            else:                                   fname, ffile = font_en_name, font_en_file
+            page = out[sp.page]
+            if text_out and _DEV.search(text_out): tgt_script = "hi"
+            else:                                   tgt_script = "en"
+            
+            fname, ffile = matcher.match_font(tgt_script, sp.flags, sp.font)
             insert_text_fit(page, sp.rect, text_out, fname, sp.fontsize, sp.color, fontfile=ffile)
 
     elif mode == "line":
@@ -368,8 +391,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                 if sl not in ("hi","en"): sl, dl = "hi","en"
             text_out = translate_text(ln.text, sl, dl, translator) or ""
             page = out[ln.page]
-            if text_out and _DEV.search(text_out): fname, ffile = font_hi_name, font_hi_file
-            else:                                   fname, ffile = font_en_name, font_en_file
+            page = out[ln.page]
+            if text_out and _DEV.search(text_out): tgt_script = "hi"
+            else:                                   tgt_script = "en"
+            
+            fname, ffile = matcher.match_font(tgt_script, ln.flags, ln.font)
+
             base_size = ln.fontsize if ln.fontsize else 11.5
             color     = ln.color if ln.color else (0.0,)
             insert_text_fit(page, ln.rect, text_out, fname, base_size, color, fontfile=ffile)
@@ -385,8 +412,11 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                 if sl not in ("hi","en"): sl, dl = "hi","en"
             text_out = translate_text(bl.text, sl, dl, translator) or ""
             page = out[bl.page]
-            if text_out and _DEV.search(text_out): fname, ffile = font_hi_name, font_hi_file
-            else:                                   fname, ffile = font_en_name, font_en_file
+            page = out[bl.page]
+            if text_out and _DEV.search(text_out): tgt_script = "hi"
+            else:                                   tgt_script = "en"
+            fname, ffile = matcher.match_font(tgt_script, bl.flags, bl.font)
+            
             base_size = bl.fontsize if bl.fontsize else 11.5
             color     = bl.color if bl.color else (0.0,)
             insert_text_fit(page, bl.rect, text_out, fname, base_size, color, fontfile=ffile)

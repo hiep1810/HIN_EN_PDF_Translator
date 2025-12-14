@@ -15,6 +15,8 @@ class HybridLine:
     rect: Tuple[float, float, float, float]
     text: str
     segments: List[HybridSegment]
+    font: str = "helv"
+    flags: int = 0
 
 @dataclass
 class HybridBlock:
@@ -24,6 +26,8 @@ class HybridBlock:
     text: str
     fontsize: float = 11.5
     color: Tuple[float, ...] = (0.0,)
+    font: str = "helv"
+    flags: int = 0
 
 def extract_blocks_with_segments(doc: fitz.Document) -> List[HybridBlock]:
     """
