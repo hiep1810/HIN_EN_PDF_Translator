@@ -26,10 +26,11 @@ def ocr_fix_pdf(input_path: str, lang: str, dpi: str, optimize: str) -> str:
         os.fspath(input_path), os.fspath(output_path)
     ]
     print("[ocrmypdf]", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    # Remove capture_output=True to show progress in terminal
+    proc = subprocess.run(cmd, text=True) 
     if proc.returncode == 0:
         print("[ocrmypdf] success ->", output_path); return output_path
-    print("[ocrmypdf] failed; fallback to rasterize.\nSTDERR:\n", proc.stderr)
+    print("[ocrmypdf] failed; fallback to rasterize.")
     try:
         image_pdf = rasterize_pdf_to_image_pdf(input_path, dpi=300)
     except Exception as e:
@@ -41,8 +42,8 @@ def ocr_fix_pdf(input_path: str, lang: str, dpi: str, optimize: str) -> str:
         os.fspath(image_pdf), os.fspath(output_path2)
     ]
     print("[ocrmypdf fallback]", " ".join(cmd2))
-    proc2 = subprocess.run(cmd2, capture_output=True, text=True)
+    proc2 = subprocess.run(cmd2, text=True)
     if proc2.returncode == 0:
         print("[ocrmypdf] success via rasterize ->", output_path2); return output_path2
-    print("[ocrmypdf] fallback failed; using original.\nSTDERR:\n", proc2.stderr)
+    print("[ocrmypdf] fallback failed; using original.")
     return input_path

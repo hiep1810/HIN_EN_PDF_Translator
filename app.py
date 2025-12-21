@@ -6,6 +6,12 @@ from concurrent.futures import ProcessPoolExecutor
 import streamlit as st
 import fitz
 
+# Add Tesseract to PATH for Windows if not present
+if os.name == "nt":
+    tess_path = r"C:\Program Files\Tesseract-OCR"
+    if os.path.isdir(tess_path) and tess_path not in os.environ["PATH"]:
+        os.environ["PATH"] += os.pathsep + tess_path
+
 from PDF_Translate.constants import (
     DEFAULT_LANG, DEFAULT_DPI, DEFAULT_OPTIMIZE, DEFAULT_TRANSLATE_DIR,
     DEFAULT_ERASE, FONT_EN_LOGICAL, FONT_EN_PATH, FONT_HI_LOGICAL,
@@ -35,7 +41,7 @@ st.caption("Style-preserving PDF translation with PyMuPDF + (optional) OCRmyPDF 
 with st.sidebar:
     st.header("Settings")
     mode = st.selectbox("Mode", ["all","overlay","hybrid","block","line","span"], index=0)
-    translate_dir = st.selectbox("Translate Direction", ["en->hi","hi->en","auto"], index=0)
+    translate_dir = st.selectbox("Translate Direction", ["en->vi", "en->hi", "hi->en", "auto"], index=0)
     erase_mode = st.selectbox("Erase original text", ["redact","mask","none"], index=0)
     lang = st.text_input("OCR language(s)", DEFAULT_LANG)
     dpi = st.text_input("OCR image DPI", DEFAULT_DPI)
@@ -127,7 +133,7 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                     with ProcessPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(
                             ocr_fix_pdf, 
-                            input_pdf=input_pdf_path, 
+                            input_path=input_pdf_path, 
                             lang=lang, 
                             dpi=dpi, 
                             optimize=optimize

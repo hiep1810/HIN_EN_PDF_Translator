@@ -2,7 +2,7 @@ from typing import List, Tuple, Dict, Optional, Any
 import fitz, os, zipfile, statistics
 from .utils import Span, pick_redact_fill_for_color, insert_text_fit, _dominant_script
 from .constants import _DEV
-from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_color_size_from_original, translate_text, batch_translate_text
+from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_style_from_original, translate_text, batch_translate_text
 from .overlay import overlay_choose_fontfile_for_text, overlay_draw_text_as_image, overlay_transform_rect, dominant_text_fill_for_rect
 from .hybrid import extract_blocks_with_segments, is_table_like, build_columns, extract_blocks_from_layout
 from .font_matcher import FontMatcher
@@ -63,7 +63,6 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
              overlay_margin_px: float = 0.1,
              overlay_target_dpi: int = 600,
              overlay_scale_x: float = 1.0, overlay_scale_y: float = 1.0,
-             overlay_off_x: float = 0.0, overlay_off_y: float = 0.0,
              overlay_off_x: float = 0.0, overlay_off_y: float = 0.0,
              # ----- translator -----
              translator = None,
@@ -143,7 +142,6 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     overlay_margin_px=overlay_margin_px, overlay_target_dpi=overlay_target_dpi,
                     overlay_scale_x=overlay_scale_x, overlay_scale_y=overlay_scale_y,
                     overlay_off_x=overlay_off_x, overlay_off_y=overlay_off_y,
-                    overlay_off_x=overlay_off_x, overlay_off_y=overlay_off_y,
                     translator=translator,
                 )
                 out_files.append(("overlay", _make_output("overlay")))
@@ -167,7 +165,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
 
     # --------- Shared: spans (for style/erase in non-overlay modes) ----------
     spans = extract_spans_from_textlayer(src)
-    transfer_color_size_from_original(spans, orig_index)
+    transfer_style_from_original(spans, orig_index)
 
     # ======================= OVERLAY MODE =======================
     if mode == "overlay":
@@ -228,9 +226,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             # Let's assume global translate_dir logic or simple detect.
             if translate_dir == "hi->en": s, d = "hi", "en"
             elif translate_dir == "en->hi": s, d = "en", "hi"
+            elif translate_dir == "en->vi": s, d = "en", "vi"
             else:
                 sl_detect = _dominant_script(raw_text)
-                d = "en" if sl_detect == "hi" else "hi"
+                if sl_detect == "hi": d = "en"
+                elif sl_detect == "en": d = "vi" # default to vi if auto and en detected? Or hi? Let's stick to safe defaults or expand logic.
+                else: d = "en"
                 s = sl_detect
                 if s not in ("hi", "en"): s, d = "hi", "en"
             
@@ -361,8 +362,12 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                  sl_def, dl_def = "hi", "en"
             elif translate_dir == "en->hi":
                  sl_def, dl_def = "en", "hi"
+            elif translate_dir == "en->vi":
+                 sl_def, dl_def = "en", "vi"
             else:
                  sl_def = _dominant_script(bl.text)
+                 # Auto logic: if hi -> en. If en -> vi (if user wants vi). But "auto" is ambiguous.
+                 # Let's keep existing "auto" as en<->hi for backward compat unless we improve it.
                  dl_def = "en" if sl_def == "hi" else "hi"
                  if sl_def not in ("hi","en"): sl_def, dl_def = "hi", "en"
             
@@ -425,6 +430,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
         for sp in spans:
             if translate_dir == "hi->en": sl, dl = "hi","en"
             elif translate_dir == "en->hi": sl, dl = "en","hi"
+            elif translate_dir == "en->vi": sl, dl = "en","vi"
             else:
                 sl = _dominant_script(sp.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
@@ -448,6 +454,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
         for ln in lines:
             if translate_dir == "hi->en": sl, dl = "hi","en"
             elif translate_dir == "en->hi": sl, dl = "en","hi"
+            elif translate_dir == "en->vi": sl, dl = "en","vi"
             else:
                 sl = _dominant_script(ln.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"
@@ -473,6 +480,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
         for bl in blocks:
             if translate_dir == "hi->en": sl, dl = "hi","en"
             elif translate_dir == "en->hi": sl, dl = "en","hi"
+            elif translate_dir == "en->vi": sl, dl = "en","vi"
             else:
                 sl = _dominant_script(bl.text); dl = "en" if sl=="hi" else "hi"
                 if sl not in ("hi","en"): sl, dl = "hi","en"

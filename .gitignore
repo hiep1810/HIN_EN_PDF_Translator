@@ -1,3 +1,6 @@
 pycache/
 *.pyc
 .venv
+__pycache__
+.streamlit
+temp
