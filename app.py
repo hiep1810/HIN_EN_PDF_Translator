@@ -1,7 +1,7 @@
 # app.py
 import os, io, time, tempfile, zipfile, json, re
 from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor
+
 
 import streamlit as st
 import fitz
@@ -40,7 +40,7 @@ st.caption("Style-preserving PDF translation with PyMuPDF + (optional) OCRmyPDF 
 # ----------------------------
 with st.sidebar:
     st.header("Settings")
-    mode = st.selectbox("Mode", ["all","overlay","hybrid","block","line","span"], index=0)
+    mode = st.selectbox("Mode", ["hybrid", "overlay", "all", "block", "line", "span"], index=0)
     translate_dir = st.selectbox("Translate Direction", ["en->vi", "en->hi", "hi->en", "auto"], index=0)
     erase_mode = st.selectbox("Erase original text", ["redact","mask","none"], index=0)
     lang = st.text_input("OCR language(s)", DEFAULT_LANG)
@@ -79,7 +79,17 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Fonts")
     en_font_path = st.text_input("English font path", FONT_EN_PATH)
-    hi_font_path = st.text_input("Hindi font path", FONT_HI_PATH_2)
+    
+    # Conditional logic for default font
+    default_vi = "C:/Windows/Fonts/arial.ttf" if os.path.exists("C:/Windows/Fonts/arial.ttf") else ""
+    
+    if translate_dir == "en->vi":
+        vi_font_path = st.text_input("Vietnamese font path", default_vi)
+        hi_font_path = None
+    else:
+        # Generic
+        hi_font_path = st.text_input("Hindi/Target font path", FONT_HI_PATH_2)
+        vi_font_path = st.text_input("Vietnamese/Other font path", default_vi)
 
     st.markdown("---")
     st.subheader("Annotation (auto-generate)")
@@ -112,8 +122,18 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
     if tr_provider in ("DeepL", "OpenAI") and not tr_api_key:
         st.error(f"Please provide API Key for {tr_provider}")
         st.stop()
+    # Time tracking
+    start_time = time.time()
+    ocr_time = 0.0
 
-    with st.spinner("Processing..."):
+    # Status container
+    with st.status("Starting process...", expanded=True) as status:
+        
+        def update_status(msg):
+            elapsed = time.time() - start_time
+            status.update(label=f"{msg} ({elapsed:.1f}s)", state="running")
+            # print(msg) # Optional logging
+            
         with tempfile.TemporaryDirectory() as workdir:
             workdir = Path(workdir)
 
@@ -123,27 +143,36 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 input_pdf_path = tf.name
 
             # Extract original layout index (for overlay / alignment)
+            update_status("Analyzing original PDF layout...")
             orig_index = extract_original_page_objects(input_pdf_path)
 
             # Optionally OCR-fix PDF
             if not skip_ocr:
                 try:
-                    # Offload to process pool (even if blocking for UI, keeps main process clean)
-                    # For Streamlit, this actually spawns a process, which is good.
-                    with ProcessPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            ocr_fix_pdf, 
-                            input_path=input_pdf_path, 
-                            lang=lang, 
-                            dpi=dpi, 
-                            optimize=optimize
-                        )
-                        src_fixed = future.result()
+                    update_status("Running OCR (this may take a while)...")
+                    ocr_start = time.time()
+                    
+                    # Run synchronously to allow real-time UI updates via callback
+                    src_fixed = ocr_fix_pdf(
+                        input_path=input_pdf_path, 
+                        lang=lang, 
+                        dpi=dpi, 
+                        optimize=optimize,
+                        progress_callback=update_status
+                    )
+                    
+                    ocr_end = time.time()
+                    ocr_time = ocr_end - ocr_start
+                    status.write(f"OCR completed in {ocr_time:.1f}s")
+                    
                 except Exception as e:
                     st.error(f"OCR failed: {e}")
                     src_fixed = input_pdf_path
             else:
                 src_fixed = input_pdf_path
+                update_status("Skipping OCR...")
+            
+            update_status("Preparing translation pipeline...")
 
             # Build base in/out paths
             src, out = build_base(src_fixed)
@@ -154,6 +183,12 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 hi_name, hi_file = resolve_font(FONT_HI_LOGICAL_2, hi_font_path)
             else:
                 hi_name, hi_file = ("helv", None)
+            
+            if vi_font_path:
+                # "helv" or custom name? Let's assume custom if path provided
+                vi_name, vi_file = resolve_font("custom_vi", vi_font_path)
+            else:
+                vi_name, vi_file = ("helv", None)
 
             # Initialize Translator
             try:
@@ -200,6 +235,7 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 redact_color=(1,1,1),
                 font_en_name=en_name, font_en_file=en_file,
                 font_hi_name=hi_name, font_hi_file=hi_file,
+                font_vn_name=vi_name, font_vn_file=vi_file,
                 output_pdf=output_pdf_path,
                 overlay_items=overlay_items,
                 overlay_render=overlay_render,
@@ -214,17 +250,42 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                 translator=translator,
                 use_ai_layout=("Surya" in layout_method),
                 layout_analyzer=layout_analyzer,
+                progress_callback=update_status # UX Callback
             )
 
             # Collect produced PDFs
+
             if mode == "all":
                 pdfs = sorted(workdir.glob(f"result_{timestamp}.all.*.pdf"))
                 zip_display_name = f"result_{timestamp}.all_all_methods.zip"
+                
+                # Make simple zip for final_path (internal use)
+                zip_name = f"result_{timestamp}.all.zip"
+                with zipfile.ZipFile(workdir / zip_name, "w") as zf:
+                    for p in pdfs: zf.write(p, p.name)
+                final_path = workdir / zip_name
             else:
                 pdfs = [Path(output_pdf_path)] if Path(output_pdf_path).exists() else sorted(workdir.glob(f"result_{timestamp}*.pdf"))
                 zip_display_name = f"result_{timestamp}.{mode}.zip"
+                final_path = workdir / out_name
 
-            if not pdfs:
+            # Read into memory for download
+            with open(final_path, "rb") as f:
+                pdf_data = f.read()
+                
+            # Store in session state for preview
+            st.session_state["preview_pdf_bytes"] = pdf_data
+            
+            # Update status to complete
+            status.update(label="Translation Complete!", state="complete", expanded=False)
+            
+            # Final Stats
+            total_time = time.time() - start_time
+            tr_time = total_time - ocr_time
+            st.success(f"Done! Total: {total_time:.1f}s (OCR: {ocr_time:.1f}s, Process: {tr_time:.1f}s)")
+
+            # If no PDFs were produced, this is an error state.
+            if not final_path.exists():
                 st.error("No PDFs produced by the pipeline.")
                 all_files = [str(p.relative_to(workdir)) for p in workdir.glob("**/*")]
                 st.write("Files in temp workspace:", all_files)
@@ -319,6 +380,7 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
                  st.session_state.pop("preview_out_bytes", None)
 
     st.success("Done!")
+
     st.download_button(
         "⬇️ Download results (ZIP)",
         data=zip_buf.getvalue(),
@@ -339,20 +401,23 @@ if st.button("Run translation", disabled=pdf_file is None, type="primary"):
             
             total_pages = len(doc_src)
             if total_pages > 0:
-                page_num = st.slider("Page Selector", 1, total_pages, 1) - 1
+                if total_pages > 1:
+                    page_num = st.slider("Page Selector", 1, total_pages, 1) - 1
+                else:
+                    page_num = 0
                 
                 c1, c2 = st.columns(2)
                 
                 with c1:
                     st.caption("Original")
                     pix1 = doc_src[page_num].get_pixmap(dpi=150)
-                    st.image(pix1.tobytes("png"), use_container_width=True)
+                    st.image(pix1.tobytes("png"), use_column_width=True)
                     
                 with c2:
                     st.caption("Translated")
                     if page_num < len(doc_out):
                         pix2 = doc_out[page_num].get_pixmap(dpi=150)
-                        st.image(pix2.tobytes("png"), use_container_width=True)
+                        st.image(pix2.tobytes("png"), use_column_width=True)
                     else:
                         st.info("Page not found in output.")
         except Exception as e:

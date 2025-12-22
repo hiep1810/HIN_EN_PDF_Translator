@@ -17,28 +17,33 @@ TEXT_FLAG_BOLD = 16
 class FontMatcher:
     def __init__(self, 
                  en_regular_path: str = FONT_EN_PATH,
-                 hi_regular_path: str = FONT_HI_PATH_2):
+                 hi_regular_path: str = FONT_HI_PATH_2,
+                 vn_regular_path: str = None):
         
         self.en_regular = en_regular_path
         self.hi_regular = hi_regular_path
+        self.vn_regular = vn_regular_path
         
         # We can expand this registry later or introspect the assets folder
         self.registry = {
             "en": {
                 "regular": self.en_regular,
-                "bold": self.en_regular, # Fallback if no specific bold
-                "serif": self.en_regular, # Fallback
-                "serif_bold": self.en_regular, # Fallback
+                "bold": self.en_regular, 
             },
             "hi": {
                 "regular": self.hi_regular,
                 "bold": self.hi_regular,
+            },
+            "vi": {
+                "regular": self.vn_regular,
+                "bold": self.vn_regular,
             }
         }
         
         # Try to find better matches in the same dir if possible
         self._auto_discover_variants("en", en_regular_path)
         self._auto_discover_variants("hi", hi_regular_path)
+        self._auto_discover_variants("vi", vn_regular_path)
 
     def _auto_discover_variants(self, lang: str, base_path: Optional[str]):
         if not base_path or not os.path.exists(base_path):
@@ -72,7 +77,10 @@ class FontMatcher:
         Returns (font_name, font_file_path) based on script and style flags.
         """
         # Determine strict script
-        lang = "hi" if script == "hi" else "en"
+        # Determine strict script
+        if script == "hi": lang = "hi"
+        elif script == "vi": lang = "vi"
+        else: lang = "en"
         
         # Determine style from flags
         is_bold = bool(original_flags & TEXT_FLAG_BOLD)

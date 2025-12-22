@@ -131,18 +131,60 @@ def insert_text_fit(page: fitz.Page, rect, text: str, fontname: str,
         sh = page.new_shape(); sh.draw_rect(r)
         sh.finish(width=0, color=None, fill=(1,0,0)); sh.commit(overlay=True)
         
-    # Smart calc
-    best_size = calculate_fitting_fontsize(page, (r.x0,r.y0,r.x1,r.y1), text, fontname, base_size, fontfile)
+    # Iterative fitting
+    # Boost base size slightly (5%) because Arial often looks smaller than source fonts
+    # and increase line spacing to fill the vertical space better.
+    current_size = calculate_fitting_fontsize(page, (r.x0,r.y0,r.x1,r.y1), text, fontname, base_size * 1.05, fontfile)
     
-    # Attempt insert
-    rv = page.insert_textbox(
-        r, text, fontname=fontname, fontfile=fontfile, fontsize=best_size,
-        lineheight=best_size*1.12, color=color, align=fitz.TEXT_ALIGN_LEFT, encoding=0
+    # Define a minimum readable size. 
+    MIN_READABLE_SIZE = 8.0 # Increased from 7.0
+    
+    # Try inserting with shrinking until it fits
+    for attempt in range(15):
+        # Check against min readable size
+        effective_size = max(current_size, MIN_READABLE_SIZE)
+        
+        target_r = fitz.Rect(r)
+        if current_size < MIN_READABLE_SIZE:
+             # Expand downwards with relaxed spacing
+             # Line height 1.25 is standard for readability
+             extra_h = (MIN_READABLE_SIZE * 1.4) * 3 
+             target_r.y1 += extra_h
+             effective_size = MIN_READABLE_SIZE
+        
+        rv = page.insert_textbox(
+            target_r, text, fontname=fontname, fontfile=fontfile, fontsize=effective_size,
+            lineheight=effective_size * 1.25, color=color, align=fitz.TEXT_ALIGN_LEFT, encoding=0
+        )
+        
+        if rv >= 0:
+            return True
+            
+        # If failed, shrink and retry
+        current_size *= 0.90
+        
+        # Loop break condition
+        if current_size < 3.0: # safety break
+             break
+             
+        # If we decided to force expansion (current_size < MIN), and it STILL failed?
+        # That means even with expanded box it failed? Unlikely unless massive text.
+        # But if we did expand, we should probably break/return True? 
+        # No, insert_textbox returns < 0 if it didn't fit.
+        # If we expanded and it still didn't fit, we might need to expand MORE?
+        
+    # If we fall through, brute force insert_text at safe size
+    safe_size = max(current_size, MIN_READABLE_SIZE)
+    page.insert_text(
+        fitz.Point(r.x0, r.y0 + safe_size),
+        text,
+        fontname=fontname,
+        fontfile=fontfile,
+        fontsize=safe_size,
+        color=color,
+        encoding=0
     )
-    if rv is not None and rv >= 0: return True
     
-    # Fallback to simple insert if tiny or fails
-    page.insert_text(r.bl, text, fontname=fontname, fontfile=fontfile, fontsize=best_size, color=color, encoding=0)
     return False
 
 def calculate_fitting_fontsize(page: fitz.Page, rect: Tuple[float,float,float,float], 
@@ -152,24 +194,32 @@ def calculate_fitting_fontsize(page: fitz.Page, rect: Tuple[float,float,float,fl
     Calculates the maximum font size ensuring text fits within rect width.
     Starts at base_size and shrinks if needed.
     """
+    import math
     r_width = rect[2] - rect[0]
-    if r_width <= 0: return base_size
+    r_height = rect[3] - rect[1]
+    if r_width <= 0 or r_height <= 0: return base_size
     
-    # Check width at base size
+    # 1. Check single-line width fitting first
     try:
         width = page.get_text_length(text, fontname=fontname, fontsize=base_size, fontfile=fontfile)
     except:
         return base_size
         
-    if width <= r_width:
-        return base_size
-        
-    # Shrink to fit width
-    # Ratio approach is good approximation for width
-    ratio = r_width / width
-    # Cap min size
-    new_size = max(5.0, base_size * ratio * 0.95) # 0.95 safety factor
-    return new_size
+    start_size = base_size
+    
+    # If wider than box, shrink immediately to fit width-wise logic
+    if width > r_width:
+        ratio = r_width / width
+        start_size = max(5.0, base_size * ratio * 0.95)
+        # Recalculate width at new size
+        width = width * (start_size / base_size)
+
+    # 2. Check multi-line height fitting
+    # REMOVED: Do not shrink based on height. 
+    # We want to preserve font size (readability) and strictly flow text.
+    # Vertical overflow will be handled by expanding the text box in insert_text_fit.
+    
+    return start_size
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = PROJECT_ROOT / "assets" / "fonts"

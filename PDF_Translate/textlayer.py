@@ -38,6 +38,54 @@ def batch_translate_text(items: List[Tuple[str, str, str]], translator, max_work
     if not translator:
         return [it[0] for it in items]
 
+    # Special optimized path for GoogleTranslator (supports bulk)
+    if translator.__class__.__name__ == "GoogleTranslator":
+        # Group by (src, dest)
+        from collections import defaultdict
+        groups = defaultdict(list)
+        # Store original indices to restore order
+        original_indices = list(range(len(items)))
+        
+        for idx, (txt, s, d) in enumerate(items):
+            groups[(s, d)].append((idx, txt))
+        
+        final_results = [""] * len(items)
+        
+        for (s, d), group_items in groups.items():
+            indices = [x[0] for x in group_items]
+            texts = [x[1] for x in group_items]
+            
+            # Translate in bulk
+            try:
+                # If list is too big, maybe chunk it? 
+                # googletrans usually handles reasonable sizes. Let's chunk by 100 just in case.
+                chunk_size = 100
+                translated_chunk_results = []
+                for i in range(0, len(texts), chunk_size):
+                    chunk = texts[i:i+chunk_size]
+                    res = translator.translate(chunk, source_lang=s, target_lang=d)
+                    if isinstance(res, list):
+                        translated_chunk_results.extend(res)
+                    elif isinstance(res, str):
+                        # Should return list if input is list, but just in case
+                        translated_chunk_results.append(res)
+                    else:
+                         # Fallback
+                         translated_chunk_results.extend(chunk)
+                
+                # Assign back
+                for idx, trans_txt in zip(indices, translated_chunk_results):
+                     # Safety check
+                     if idx < len(final_results):
+                        final_results[idx] = trans_txt
+            except Exception as e:
+                print(f"[batch_translate] Google bulk error: {e}")
+                # Fallback to original
+                for idx, txt in zip(indices, texts):
+                    final_results[idx] = txt
+                    
+        return final_results
+
     def _worker(args):
         txt, s, d = args
         return translate_text(txt, s, d, translator)

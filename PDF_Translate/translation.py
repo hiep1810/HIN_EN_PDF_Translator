@@ -21,23 +21,39 @@ class GoogleTranslator(Translator):
         from googletrans import Translator as GTranslator
         self.service = GTranslator(timeout=10, service_urls=["translate.googleapis.com"])
     
-    def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+    
+    def translate(self, text, source_lang: str, target_lang: str):
+        import time, random
         try:
             # googletrans uses 'src' and 'dest'
-            # Mapping 'auto' to None for googletrans might be needed, or it handles 'auto'
             src = source_lang if source_lang != "auto" else "auto"
+            
+            # Rate limit protection: Sleep randomized 0.5 - 1.5s (only ONCE per batch now)
+            time.sleep(random.uniform(0.5, 1.5))
+            
+            # Use asyncio.run if possible, else handle existing loop
             res = self.service.translate(text, src=src, dest=target_lang)
             
-            # wrapper might return coroutine in some versions, handle it
             if asyncio.iscoroutine(res):
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                res = loop.run_until_complete(res)
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                 
-            return getattr(res, "text", text)
+                if loop.is_running():
+                    res = loop.run_until_complete(res)
+                else:
+                    res = loop.run_until_complete(res)
+            
+            if isinstance(res, list):
+                return [getattr(r, "text", "") for r in res]
+            else:
+                return getattr(res, "text", text)
         except Exception as e:
-            print(f"[GoogleTranslator] Error: {e}")
-            return text
+            # print(f"[GoogleTranslator] Error: {e}") 
+            # Return original if failed (graceful fallback)
+            return text if not isinstance(text, list) else text
 
 class DeepLTranslator(Translator):
     def __init__(self, api_key: str):

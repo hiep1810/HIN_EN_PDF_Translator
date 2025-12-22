@@ -54,6 +54,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
              erase_mode: str, redact_color: Tuple[float,...],
              font_en_name: str, font_en_file: Optional[str],
              font_hi_name: str, font_hi_file: Optional[str],
+             font_vn_name: str, font_vn_file: Optional[str],
              output_pdf: str,
              # ----- overlay parameters -----
              overlay_items: Optional[List[Dict[str, Any]]] = None,
@@ -68,7 +69,9 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
              translator = None,
              # ----- layout -----
              use_ai_layout: bool = False,
-             layout_analyzer = None) -> None:
+             layout_analyzer = None,
+             # ----- UX -----
+             progress_callback = None) -> None:
     """
     - span/line/block/hybrid: style-preserving translation and draw.
     - overlay: paint from prebuilt JSON items.
@@ -78,7 +81,11 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
 
     # Initialize Font Matcher
     # We use provided regular fonts as base
-    matcher = FontMatcher(en_regular_path=font_en_file, hi_regular_path=font_hi_file)
+    matcher = FontMatcher(
+        en_regular_path=font_en_file, 
+        hi_regular_path=font_hi_file,
+        vn_regular_path=font_vn_file
+    )
 
     # ======================= "ALL" MODE =======================
     if mode == "all":
@@ -118,6 +125,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     erase_mode=erase_mode, redact_color=redact_color,
                     font_en_name=font_en_name, font_en_file=font_en_file,
                     font_hi_name=font_hi_name, font_hi_file=font_hi_file,
+                    font_vn_name=font_vn_name, font_vn_file=font_vn_file,
                     output_pdf=_make_output(sub_mode),
                     translator=translator,
                     use_ai_layout=use_ai_layout if sub_mode == "hybrid" else False,
@@ -136,6 +144,7 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                     erase_mode=erase_mode, redact_color=redact_color,
                     font_en_name=font_en_name, font_en_file=font_en_file,
                     font_hi_name=font_hi_name, font_hi_file=font_hi_file,
+                    font_vn_name=font_vn_name, font_vn_file=font_vn_file,
                     output_pdf=_make_output("overlay"),
                     overlay_items=overlay_items, overlay_render=overlay_render,
                     overlay_align=overlay_align, overlay_line_spacing=overlay_line_spacing,
@@ -240,13 +249,18 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             
         # 2. Batch translate
         print(f"[overlay] Batch translating {len(requests)} items...")
-        translated_texts = batch_translate_text(requests, translator)
+        if progress_callback: progress_callback(f"Translating {len(requests)} text items (Overlay)...")
+        
+        # Googletrans hangs on concurrency > 1
+        mw = 1 if (translator and translator.__class__.__name__ == "GoogleTranslator") else 5
+        translated_texts = batch_translate_text(requests, translator, max_workers=mw)
         
         # 3. Apply translations back to items (temporarily or permanently)
         for idx, trans_text in zip(indices, translated_texts):
              overlay_items[idx]["translated_text"] = trans_text
 
         # 4. Render
+        if progress_callback: progress_callback(f"Rendering {len(out)} pages (Overlay)...")
         for it in overlay_items:
             pno = int(it["page"])
             if pno < 0 or pno >= len(out):
@@ -385,9 +399,18 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
 
         # 2. Batch Translate
         print(f"[hybrid] Batch translating {len(requests)} items...")
-        results = batch_translate_text(requests, translator)
+        if progress_callback: progress_callback(f"Translating {len(requests)} text blocks (hybrid mode)...")
+        
+        # Googletrans hangs on concurrency > 1
+        mw = 1 if (translator and translator.__class__.__name__ == "GoogleTranslator") else 5
+        results = batch_translate_text(requests, translator, max_workers=mw)
         
         # 3. Render
+        print(f"[{mode}] Rendering {len(src)} pages...")
+        if progress_callback: progress_callback(f"Rendering {len(src)} pages ({mode} mode)...")
+        
+        # We need to map translations back.
+        # requests order: loop over blocks (which are per page usually? No, hblocks is flat list?):
         # We iterate map_back and results together
         for info, res_text in zip(map_back, results):
             text_out = res_text or ""

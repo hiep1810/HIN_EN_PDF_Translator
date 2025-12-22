@@ -18,76 +18,48 @@ class LayoutAnalyzer(ABC):
 class SuryaLayoutAnalyzer(LayoutAnalyzer):
     def __init__(self):
         try:
-            from surya.detection import batch_text_detection
-            from surya.model.detection.model import load_model, load_processor
-            from surya.settings import settings
-            
-            self.model = load_model(checkpoint=settings.DETECTOR_MODEL_CHECKPOINT)
-            self.processor = load_processor(checkpoint=settings.DETECTOR_MODEL_CHECKPOINT)
-            self.batch_text_detection = batch_text_detection
+            from surya.detection import DetectionPredictor
+            self.predictor = DetectionPredictor()
+            self.layout_predictor = None
         except ImportError:
-            raise ImportError("surya-ocr is not installed. Please run `pip install surya-ocr`.")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load Surya model: {e}")
+             raise ImportError("Failed to import surya.detection.DetectionPredictor. Please ensure surya-ocr >= 0.6.0 is installed.")
 
     def analyze_page(self, page_image: Image.Image) -> List[Tuple[float, float, float, float]]:
         """
-        Returns list of bboxes [x0, y0, x1, y1] for detected text lines/regions.
-        Surya detects *lines*. We might want to group them or just use lines.
-        Actually, Surya has layout analysis (detection of columns/blocks) 
-        but the primary `batch_text_detection` returns lines/polygons.
-        
-        To get high quality blocks, we can just return the lines and let our hybrid 
-        heuristic merge them, OR we can rely on Surya's layout model if we used `surya_layout`.
-        
-        However, `surya-ocr` python API for layout is:
-        `from surya.layout import batch_layout_detection`
-        
-        Let's try to support `batch_layout_detection` if available, checking imports.
+        Returns list of bboxes [x0, y0, x1, y1] for detected text regions.
+        Prioritizes Layout Analysis (blocks) if available, falls back to Text Detection (lines).
         """
+        # 1. Try Layout Analysis first (better for blocks)
         try:
-            from surya.layout import batch_layout_detection
-            from surya.model.layout.model import load_model as load_layout_model
-            from surya.model.layout.processor import load_processor as load_layout_processor
-            from surya.settings import settings
-            
-            if not hasattr(self, 'layout_model'):
-                self.layout_model = load_layout_model(checkpoint=settings.LAYOUT_MODEL_CHECKPOINT)
-                self.layout_processor = load_layout_processor(checkpoint=settings.LAYOUT_MODEL_CHECKPOINT)
-                self.batch_layout_detection = batch_layout_detection
+            if self.layout_predictor is None:
+                from surya.layout import LayoutPredictor
+                self.layout_predictor = LayoutPredictor()
                 
-            # Run layout detection
-            results = self.batch_layout_detection([page_image], self.layout_model, self.layout_processor)
+            results = self.layout_predictor([page_image])
             res = results[0]
             
-            # extract bboxes from layout results
-            # res.bboxes is a list of LayoutBox objects usually
             output_boxes = []
             for item in res.bboxes:
-                # item.bbox needs to be converted to list/tuple
-                # Surya layout boxes are [x0, y0, x1, y1]
-                bbox = item.bbox
-                output_boxes.append(tuple(bbox))
+                # LayoutBox has bbox [x0, y0, x1, y1]
+                output_boxes.append(tuple(item.bbox))
                 
             return output_boxes
             
         except ImportError:
-            # Fallback to text detection if layout module missing (older surya?) 
-            # or just fail. 
-            # But wait, user asked for 'Surya (Layout)'. 
-            # We assume modern surya-ocr installed which has layout.
-            print("Surya layout module not found, falling back to text detection lines.")
-            predictions = self.batch_text_detection([page_image], self.model, self.processor)
-            res = predictions[0]
-            
-            boxes = []
-            for polygon in res.bboxes:
-                 # polygon is [x0,y0, x1,y0, x1,y1, x0,y1] usually for surya detection
-                 # we want bbox
-                 xs = [p[0] for p in polygon]
-                 ys = [p[1] for p in polygon]
-                 boxes.append((min(xs), min(ys), max(xs), max(ys)))
-            return boxes
+            pass # No layout module, strictly stick to text detection
+        except Exception as e:
+            print(f"Surya Layout Analysis failed: {e}. Falling back to Text Detection.")
+
+        # 2. Fallback to Text Detection (lines)
+        results = self.predictor([page_image])
+        res = results[0]
+        
+        boxes = []
+        for item in res.bboxes:
+             # TextLine bbox is [x0, y0, x1, y1]
+             boxes.append(tuple(item.bbox))
+             
+        return boxes
 
 def get_layout_analyzer(method: str) -> LayoutAnalyzer:
     if method == "Surya":
