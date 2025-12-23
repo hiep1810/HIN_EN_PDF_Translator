@@ -1,5 +1,5 @@
 from typing import List, Tuple, Dict, Optional, Any
-import fitz, os, zipfile, statistics
+import fitz, os, zipfile, statistics, re
 from .utils import Span, pick_redact_fill_for_color, insert_text_fit, _dominant_script
 from .constants import _DEV
 from .textlayer import extract_blocks_from_textlayer, extract_lines_from_textlayer, extract_spans_from_textlayer, derive_line_styles_from_spans, derive_block_styles_from_spans, transfer_style_from_original, translate_text, batch_translate_text
@@ -230,6 +230,9 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
             raw_text = it.get("text", "")
             if not raw_text: continue
             
+            # FIX: OCR I vs |
+            raw_text = re.sub(r'(^|\s)\|(?=\s)', r'\1I', raw_text)
+            
             # Determine direction (overlay logic is simpler, usually en->hi or explicit)
             # Default auto logic from build_overlay_items usually sets it?
             # Let's assume global translate_dir logic or simple detect.
@@ -394,7 +397,15 @@ def run_mode(mode: str, src: fitz.Document, out: fitz.Document,
                          map_back.append({'type': 'seg', 'b': b_i, 'l': l_i, 's': s_i, 'cols': cols})
             else:
                  # Translate full block
-                 requests.append((bl.text, sl_def, dl_def))
+                 # FIX: OCR often misreads 'I' as '|'. Clean specifically standalone '|'.
+                 # Regex: Start of line or space, followed by '|', followed by space/end of line?
+                 # Actually simpler: (^|\s)\|(\s|$) -> \1I\2
+                 # Only if Lang is English (source or target? Source extraction).
+                 # We only clean if extraction seems EN?
+                 # Actually, '|' is rare in text anyway. Safety fix.
+                 cleaned_text = re.sub(r'(^|\s)\|(?=\s)', r'\1I', bl.text)
+                 
+                 requests.append((cleaned_text, sl_def, dl_def))
                  map_back.append({'type': 'block', 'b': b_i})
 
         # 2. Batch Translate
